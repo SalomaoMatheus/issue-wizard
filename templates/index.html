@@ -44,6 +44,19 @@
 
             let timers = {}; // Objeto para armazenar o estado dos timers
 
+            // Usa delegação de eventos para os botões de adicionar tempo da lista
+            // Movido para fora da função renderIssues para ser registrado apenas uma vez
+            issuesContainer.addEventListener('click', (e) => {
+                if (e.target.classList.contains('add-tracked-time-btn')) {
+                    handleAddTrackedTime(e);
+                } else if (e.target.classList.contains('delete-tracked-time-btn')) {
+                    const li = e.target.closest('li');
+                    if (!li.classList.contains('added')) {
+                        li.remove();
+                    }
+                }
+            });
+
             const savedMilestone = localStorage.getItem('selectedMilestone');
 
             loadingIndicator.classList.remove('hidden'); // Mostrar loading no início
@@ -221,7 +234,7 @@
                 });
                 
                 // Usa delegação de eventos para os botões de adicionar tempo da lista
-                issuesContainer.addEventListener('click', (e) => {
+                /* issuesContainer.addEventListener('click', (e) => {
                     if (e.target.classList.contains('add-tracked-time-btn')) {
                         handleAddTrackedTime(e);
                     } else if (e.target.classList.contains('delete-tracked-time-btn')) {
@@ -230,7 +243,7 @@
                             li.remove();
                         }
                     }
-                });
+                }); */
 
                 // Adicionar event listener para reopen
                 document.querySelectorAll('.reopen-btn').forEach(btn => {
@@ -312,9 +325,15 @@
             }
 
             async function handleAddTrackedTime(e) {
-                const button = e.target;
+                const button = e.target.closest('.add-tracked-time-btn');
+                if (!button) return;
+
                 const { duration, issueId, projectId, issueIid } = button.dataset;
                 const feedbackEl = document.getElementById(`feedback-${issueId}`);
+
+                // Desabilita o botão e mostra o estado de carregamento para evitar cliques duplos
+                button.disabled = true;
+                button.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
 
                 try {
                     const response = await fetch('/api/add_time', {
@@ -335,14 +354,13 @@
                     document.getElementById(`spent-${issueId}`).textContent = data.new_total_spent;
                     showFeedback(feedbackEl, `Tempo (${duration}) adicionado com sucesso!`, 'success');
 
-                    // Desabilita o botão e risca o item
-                    button.disabled = true;
+                    // Confirma o sucesso e mantém o botão desabilitado
+                    button.innerHTML = '<i class="fas fa-check"></i>';
                     const deleteBtn = button.closest('li').querySelector('.delete-tracked-time-btn');
                     if (deleteBtn) deleteBtn.remove();
                     button.closest('li').classList.add('added');
 
                     // Recalcula o tempo total
-                    // Re-fetch não é ideal, vamos apenas atualizar o valor que temos
                     const totalTimeEl = document.getElementById('total-time-spent');
                     const currentTotalSeconds = parseGitLabTime(totalTimeEl.textContent.replace('Tempo total gasto: ', ''));
                     const addedSeconds = parseGitLabTime(duration);
@@ -351,6 +369,9 @@
 
                 } catch (error) {
                     showFeedback(feedbackEl, `Erro: ${error.message}`, 'error');
+                    // Reabilita o botão em caso de erro
+                    button.disabled = false;
+                    button.innerHTML = '+';
                 }
             }
 

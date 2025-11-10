@@ -83,7 +83,15 @@ def add_time():
         
         # Pega a issue atualizada para retornar o novo tempo total
         updated_issue = project.issues.get(issue_iid)
-        new_total_spent = updated_issue.time_stats['human_total_time_spent'] or '0h'
+
+        # O atributo time_stats pode se comportar de forma diferente (dict vs method)
+        # dependendo de como o objeto issue foi obtido.
+        # Esta abordagem garante que lidamos com ambos os casos.
+        time_stats = getattr(updated_issue, 'time_stats')
+        if callable(time_stats):
+            time_stats = time_stats()
+            
+        new_total_spent = time_stats['human_total_time_spent'] or '0h'
 
         return jsonify({"success": True, "new_total_spent": new_total_spent})
 
