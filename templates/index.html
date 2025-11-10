@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Issue Wizard - GitLab</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Issue Wizard</h1>
+            <p>Gerenciador de tempo para issues do GitLab</p>
+        </header>
+
+        <main>
+            <form id="milestone-form">
+                <select id="milestone-select" required>
+                    <option value="">Selecione uma Milestone</option>
+                </select>
+                <button type="submit">Buscar Issues</button>
+            </form>
+
+            <div id="loading" class="hidden">
+                <div class="spinner"></div>
+                <p>Buscando suas issues no GitLab...</p>
+            </div>
+            
+            <div id="error-message" class="hidden"></div>
+            <div id="total-time-spent" class="hidden"></div>
+            <div id="issues-container"></div>
+        </main>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', async () => {
+            const form = document.getElementById('milestone-form');
+            const input = document.getElementById('milestone-input'); // This input is no longer used
+            const select = document.getElementById('milestone-select');
+            const issuesContainer = document.getElementById('issues-container');
+            const loadingIndicator = document.getElementById('loading');
+            const errorMessage = document.getElementById('error-message');
+
+            let timers = {}; // Objeto para armazenar o estado dos timers
+
+            const savedMilestone = localStorage.getItem('selectedMilestone');
+
+            loadingIndicator.classList.remove('hidden'); // Mostrar loading no início
+
+            try {
+                const response = await fetch('/api/milestones');
+                const milestones = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(milestones.error || `Erro ${response.status}`);
+                }
+
+                milestones.forEach(m => {
+                    const option = document.createElement('option');
+                    option.value = m.title;
+                    option.textContent = m.title;
+                    if (savedMilestone && savedMilestone === m.title) {
+                        option.selected = true;
+                    }
+                    select.appendChild(option);
+                });
+
+                // Se há salva, trigger fetch automático
+                if (savedMilestone && select.value) {
+                    await fetchIssues(select.value);
+                }
+            } catch (error) {
+                errorMessage.textContent = `Falha ao carregar milestones: ${error.message}`;
+                errorMessage.classList.remove('hidden');
+            } finally {
+                loadingIndicator.classList.add('hidden');
+            }
+
+            // Modificar submit para usar select.value e salvar no localStorage
+            form.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const milestone = select.value.trim();
+                if (!milestone) return;
+
+                localStorage.setItem('selectedMilestone', milestone);
+
+                // Reset UI
+                issuesContainer.innerHTML = '';
+                errorMessage.classList.add('hidden');
+                loadingIndicator.classList.remove('hidden');
+
+                await fetchIssues(milestone);
+            });
+
+            // Função helper para fetch
+            async function fetchIssues(milestone) {
+                try {
+                    const response = await fetch(`/api/issues?milestone=${encodeURIComponent(milestone)}`);
+                    const data = await response.json();
+
+                    if (!response.ok) {
+                        throw new Error(data.error || `Erro ${response.status}`);
+                    }
+
+                    if (data.length === 0) {
+                        issuesContainer.innerHTML = '<p class="no-issues">Nenhuma issue encontrada para você nesta milestone.</p>';
+                        document.getElementById('total-time-spent').classList.add('hidden');
+                    } else {
+                        // Ordena as issues: abertas primeiro
+                        data.sort((a, b) => {
+                            if (a.state === 'opened' && b.state !== 'opened') return -1;
+                            if (a.state !== 'opened' && b.state === 'opened') return 1;
+                            return 0;
+                        });
+                        
+                        renderIssues(data);
+                        calculateAndDisplayTotalTime(data);
+                    }
+                } catch (error) {
+                    errorMessage.textContent = `Falha ao buscar issues: ${error.message}`;
+                    errorMessage.classList.remove('hidden');
+                } finally {
+                    loadingIndicator.classList.add('hidden');
+                }
+            }
+
+            function calculateAndDisplayTotalTime(issues) {
+                const totalSeconds = issues.reduce((acc, issue) => {
+                    const timeSpent = issue.total_time_spent || '0h';
+                    return acc + parseGitLabTime(timeSpent);
+                }, 0);
+
+                const totalTimeEl = document.getElementById('total-time-spent');
+                totalTimeEl.textContent = `Tempo total gasto: ${formatSecondsToGitLabTime(totalSeconds)}`;
+                totalTimeEl.classList.remove('hidden');
+            }
+
+            function parseGitLabTime(timeString) {
+                let totalSeconds = 0;
+                const weekMatches = timeString.match(/(\d+)w/);
+                const dayMatches = timeString.match(/(\d+)d/);
+                const hourMatches = timeString.match(/(\d+)h/);
+                const minuteMatches = timeString.match(/(\d+)m/);
+
+                if (weekMatches) totalSeconds += parseInt(weekMatches[1], 10) * 5 * 8 * 3600; // Assume 5-day, 8-hour work week
+                if (dayMatches) totalSeconds += parseInt(dayMatches[1], 10) * 8 * 3600; // Assume 8-hour day
+                if (hourMatches) totalSeconds += parseInt(hourMatches[1], 10) * 3600;
+                if (minuteMatches) totalSeconds += parseInt(minuteMatches[1], 10) * 60;
+                
+                return totalSeconds;
+            }
+
+            function formatSecondsToGitLabTime(totalSeconds) {
+                if (totalSeconds === 0) return '0m';
+                
+                const hours = Math.floor(totalSeconds / 3600);
+                const minutes = Math.floor((totalSeconds % 3600) / 60);
+                
+                let result = '';
+                if (hours > 0) result += `${hours}h `;
+                if (minutes > 0) result += `${minutes}m`;
+                
+                return result.trim();
+            }
+
+            function renderIssues(issues) {
+                issuesContainer.innerHTML = ''; // Limpa antes de renderizar
+                issues.forEach(issue => {
+                    const isOpen = issue.state === 'opened';
+                    const timetrackHTML = isOpen ? `
+                        <div class="timetrack-column">
+                            <div class="timer-display" id="timer-display-${issue.id}">00:00:00</div>
+                            <div class="timer-controls">
+                                <button class="timer-btn start-btn" data-issue-id="${issue.id}">Iniciar</button>
+                                <button class="timer-btn stop-btn" data-issue-id="${issue.id}" disabled>Parar</button>
+                            </div>
+                            <ul class="timetrack-list" id="timetrack-list-${issue.id}"></ul>
+                        </div>
+                    ` : '';
+
+                    const footerContent = isOpen ? `
+                        <form class="add-time-form" data-issue-id="${issue.id}" data-project-id="${issue.project_id}" data-issue-iid="${issue.iid}">
+                            <input type="number" class="time-input" placeholder="Horas" min="0">
+                            <input type="number" class="time-input" placeholder="Min" min="0" max="59">
+                            <button type="submit">Adicionar Manualmente</button>
+                        </form>
+                    ` : `<button class="reopen-btn" data-issue-id="${issue.id}" data-project-id="${issue.project_id}" data-issue-iid="${issue.iid}">Reabrir Issue</button>`;
+
+                    const issueElement = document.createElement('div');
+                    issueElement.className = 'issue-card';
+                    issueElement.innerHTML = `
+                        <div class="issue-header">
+                            <a href="${issue.web_url}" target="_blank" title="Abrir no GitLab">${issue.title}</a>
+                            <span class="issue-state state-${issue.state}">${issue.state}</span>
+                        </div>
+                        <div class="issue-body">
+                            <div class="info-column">
+                                <p><strong>Estimado:</strong> ${issue.time_estimate}</p>
+                                <p><strong>Gasto:</strong> <span id="spent-${issue.id}">${issue.total_time_spent}</span></p>
+                            </div>
+                            ${timetrackHTML}
+                        </div>
+                        <div class="issue-footer">
+                            ${footerContent}
+                        </div>
+                        <div id="feedback-${issue.id}" class="feedback hidden"></div>
+                    `;
+                    issuesContainer.appendChild(issueElement);
+                });
+
+                // Adiciona event listeners para os novos formulários e botões
+                document.querySelectorAll('.add-time-form').forEach(form => {
+                    form.addEventListener('submit', handleAddTime);
+                });
+                document.querySelectorAll('.start-btn').forEach(btn => {
+                    btn.addEventListener('click', startTimer);
+                });
+                document.querySelectorAll('.stop-btn').forEach(btn => {
+                    btn.addEventListener('click', stopTimer);
+                });
+                
+                // Usa delegação de eventos para os botões de adicionar tempo da lista
+                issuesContainer.addEventListener('click', (e) => {
+                    if (e.target.classList.contains('add-tracked-time-btn')) {
+                        handleAddTrackedTime(e);
+                    } else if (e.target.classList.contains('delete-tracked-time-btn')) {
+                        const li = e.target.closest('li');
+                        if (!li.classList.contains('added')) {
+                            li.remove();
+                        }
+                    }
+                });
+
+                // Adicionar event listener para reopen
+                document.querySelectorAll('.reopen-btn').forEach(btn => {
+                    btn.addEventListener('click', handleReopenIssue);
+                });
+            }
+            
+            function startTimer(e) {
+                const issueId = e.target.dataset.issueId;
+                if (timers[issueId] && timers[issueId].interval) return; // Já rodando
+
+                const startTime = Date.now();
+                const timerDisplay = document.getElementById(`timer-display-${issueId}`);
+
+                const interval = setInterval(() => {
+                    const elapsedTime = Date.now() - startTime;
+                    timerDisplay.textContent = new Date(elapsedTime).toISOString().substr(11, 8);
+                }, 1000);
+
+                timers[issueId] = {
+                    interval: interval,
+                    startTime: startTime
+                };
+                
+                // Atualiza UI dos botões
+                e.target.disabled = true;
+                document.querySelector(`.stop-btn[data-issue-id="${issueId}"]`).disabled = false;
+            }
+
+            function stopTimer(e) {
+                const issueId = e.target.dataset.issueId;
+                if (!timers[issueId] || !timers[issueId].interval) return;
+
+                clearInterval(timers[issueId].interval);
+                const endTime = Date.now();
+                const totalMilliseconds = endTime - timers[issueId].startTime;
+                
+                const hours = Math.floor(totalMilliseconds / 3600000);
+                const minutes = Math.floor((totalMilliseconds % 3600000) / 60000);
+                
+                if (hours === 0 && minutes === 0) { // Não adiciona se for 0
+                    // Apenas reseta a UI
+                    document.getElementById(`timer-display-${issueId}`).textContent = '00:00:00';
+                    document.querySelector(`.stop-btn[data-issue-id="${issueId}"]`).disabled = true;
+                    document.querySelector(`.start-btn[data-issue-id="${issueId}"]`).disabled = false;
+                    delete timers[issueId];
+                    return;
+                }
+
+                const timeString = `${hours}h ${minutes}m`;
+                
+                // Adiciona o tempo na lista
+                const timetrackList = document.getElementById(`timetrack-list-${issueId}`);
+                const newItem = document.createElement('li');
+                const issueCard = e.target.closest('.issue-card');
+                const form = issueCard.querySelector('.add-time-form');
+                
+                newItem.innerHTML = `
+                    <span>${timeString}</span>
+                    <button class="add-tracked-time-btn" 
+                            data-duration="${timeString}"
+                            data-issue-id="${form.dataset.issueId}"
+                            data-project-id="${form.dataset.projectId}"
+                            data-issue-iid="${form.dataset.issueIid}">+</button>
+                    <button class="delete-tracked-time-btn"><i class="fas fa-trash"></i></button>
+                `;
+                timetrackList.appendChild(newItem);
+
+
+                // Limpa o timer do estado
+                delete timers[issueId];
+                
+                // Reseta o display do timer
+                document.getElementById(`timer-display-${issueId}`).textContent = '00:00:00';
+                
+                // Atualiza UI dos botões
+                e.target.disabled = true;
+                document.querySelector(`.start-btn[data-issue-id="${issueId}"]`).disabled = false;
+            }
+
+            async function handleAddTrackedTime(e) {
+                const button = e.target;
+                const { duration, issueId, projectId, issueIid } = button.dataset;
+                const feedbackEl = document.getElementById(`feedback-${issueId}`);
+
+                try {
+                    const response = await fetch('/api/add_time', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            project_id: projectId,
+                            issue_iid: issueIid,
+                            duration: duration
+                        })
+                    });
+                    const data = await response.json();
+                    if (!response.ok) {
+                        throw new Error(data.error || `Erro ${response.status}`);
+                    }
+                    
+                    // Update UI
+                    document.getElementById(`spent-${issueId}`).textContent = data.new_total_spent;
+                    showFeedback(feedbackEl, `Tempo (${duration}) adicionado com sucesso!`, 'success');
+
+                    // Desabilita o botão e risca o item
+                    button.disabled = true;
+                    const deleteBtn = button.closest('li').querySelector('.delete-tracked-time-btn');
+                    if (deleteBtn) deleteBtn.remove();
+                    button.closest('li').classList.add('added');
+
+                    // Recalcula o tempo total
+                    // Re-fetch não é ideal, vamos apenas atualizar o valor que temos
+                    const totalTimeEl = document.getElementById('total-time-spent');
+                    const currentTotalSeconds = parseGitLabTime(totalTimeEl.textContent.replace('Tempo total gasto: ', ''));
+                    const addedSeconds = parseGitLabTime(duration);
+                    totalTimeEl.textContent = `Tempo total gasto: ${formatSecondsToGitLabTime(currentTotalSeconds + addedSeconds)}`;
+
+
+                } catch (error) {
+                    showFeedback(feedbackEl, `Erro: ${error.message}`, 'error');
+                }
+            }
+
+            // Modificar handleAddTime para adicionar à lista em vez de API
+            function handleAddTime(e) {
+                e.preventDefault();
+                const form = e.target;
+                const hours = parseInt(form.querySelector('input[placeholder="Horas"]').value) || 0;
+                const minutes = parseInt(form.querySelector('input[placeholder="Min"]').value) || 0;
+                
+                if (hours === 0 && minutes === 0) return;
+                
+                const timeString = `${hours > 0 ? hours + 'h ' : ''}${minutes > 0 ? minutes + 'm' : ''}`.trim();
+                const issueId = form.dataset.issueId;
+                const timetrackList = document.getElementById(`timetrack-list-${issueId}`);
+                const newItem = document.createElement('li');
+                
+                newItem.innerHTML = `
+                    <span>${timeString}</span>
+                    <button class="add-tracked-time-btn" 
+                            data-duration="${timeString}"
+                            data-issue-id="${issueId}"
+                            data-project-id="${form.dataset.projectId}"
+                            data-issue-iid="${form.dataset.issueIid}">+</button>
+                    <button class="delete-tracked-time-btn"><i class="fas fa-trash"></i></button>
+                `;
+                timetrackList.appendChild(newItem);
+                
+                form.reset();
+                showFeedback(document.getElementById(`feedback-${issueId}`), `Tempo manual adicionado à lista!`, 'success');
+            }
+            
+            function showFeedback(element, message, type) {
+                element.textContent = message;
+                element.className = `feedback ${type}`;
+                element.classList.remove('hidden');
+                setTimeout(() => {
+                    element.classList.add('hidden');
+                }, 4000);
+            }
+
+            // Nova função para reabrir issue
+            async function handleReopenIssue(e) {
+                const button = e.target;
+                const { issueId, projectId, issueIid } = button.dataset;
+                const feedbackEl = document.getElementById(`feedback-${issueId}`);
+
+                try {
+                    const response = await fetch('/api/reopen_issue', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            project_id: projectId,
+                            issue_iid: issueIid
+                        })
+                    });
+                    const data = await response.json();
+                    if (!response.ok) {
+                        throw new Error(data.error || `Erro ${response.status}`);
+                    }
+
+                    // Atualizar UI: mudar estado, adicionar timetrack
+                    const issueCard = button.closest('.issue-card');
+                    const stateSpan = issueCard.querySelector('.issue-state');
+                    stateSpan.textContent = 'opened';
+                    stateSpan.className = 'issue-state state-opened';
+
+                    // Adicionar timetrack-column
+                    const body = issueCard.querySelector('.issue-body');
+                    const timetrackDiv = document.createElement('div');
+                    timetrackDiv.className = 'timetrack-column';
+                    timetrackDiv.innerHTML = `
+                        <div class="timer-display" id="timer-display-${issueId}">00:00:00</div>
+                        <div class="timer-controls">
+                            <button class="timer-btn start-btn" data-issue-id="${issueId}">Iniciar</button>
+                            <button class="timer-btn stop-btn" data-issue-id="${issueId}" disabled>Parar</button>
+                        </div>
+                        <ul class="timetrack-list" id="timetrack-list-${issueId}"></ul>
+                    `;
+                    body.appendChild(timetrackDiv);
+
+                    // Adicionar listeners aos novos botões
+                    timetrackDiv.querySelector('.start-btn').addEventListener('click', startTimer);
+                    timetrackDiv.querySelector('.stop-btn').addEventListener('click', stopTimer);
+
+                    // Substituir conteúdo do footer com o form
+                    const footer = issueCard.querySelector('.issue-footer');
+                    footer.innerHTML = `
+                        <form class="add-time-form" data-issue-id="${issueId}" data-project-id="${projectId}" data-issue-iid="${issueIid}">
+                            <input type="number" class="time-input" placeholder="Horas" min="0">
+                            <input type="number" class="time-input" placeholder="Min" min="0" max="59">
+                            <button type="submit">Adicionar Manualmente</button>
+                        </form>
+                    `;
+                    footer.querySelector('.add-time-form').addEventListener('submit', handleAddTime);
+
+                    showFeedback(feedbackEl, 'Issue reaberta com sucesso!', 'success');
+                } catch (error) {
+                    showFeedback(feedbackEl, `Erro: ${error.message}`, 'error');
+                }
+            }
+        });
+    </script>
+</body>
+</html>
