@@ -49,6 +49,7 @@ def get_issues():
                 'project_id': issue.project_id,
                 'title': issue.title,
                 'state': issue.state,
+                'labels': issue.labels,
                 'time_estimate': issue.time_stats['human_time_estimate'] or '0h',
                 'total_time_spent': issue.time_stats['human_total_time_spent'] or '0h',
                 'web_url': issue.web_url

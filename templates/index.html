@@ -106,6 +106,14 @@
                 await fetchIssues(milestone);
             });
 
+            function getPriority(issue) {
+                if (!issue.labels || issue.labels.length === 0) {
+                    return Infinity;
+                }
+                const priorityLabel = issue.labels.find(label => /^\d+$/.test(label));
+                return priorityLabel ? parseInt(priorityLabel, 10) : Infinity;
+            }
+
             // Função helper para fetch
             async function fetchIssues(milestone) {
                 try {
@@ -120,11 +128,28 @@
                         issuesContainer.innerHTML = '<p class="no-issues">Nenhuma issue encontrada para você nesta milestone.</p>';
                         document.getElementById('total-time-spent').classList.add('hidden');
                     } else {
-                        // Ordena as issues: abertas primeiro
+                        // Ordena as issues com a nova lógica
                         data.sort((a, b) => {
-                            if (a.state === 'opened' && b.state !== 'opened') return -1;
-                            if (a.state !== 'opened' && b.state === 'opened') return 1;
-                            return 0;
+                            // 1. Issues fechadas sempre por último
+                            const aIsClosed = a.state !== 'opened';
+                            const bIsClosed = b.state !== 'opened';
+                            if (aIsClosed && !bIsClosed) return 1;
+                            if (!aIsClosed && bIsClosed) return -1;
+                            if (aIsClosed && bIsClosed) return 0;
+
+                            // Se ambas estiverem abertas, aplicamos as outras regras
+                            
+                            // 2. Tag 'reuniao' tem prioridade máxima
+                            const aHasReuniao = a.labels.includes('reuniao');
+                            const bHasReuniao = b.labels.includes('reuniao');
+                            if (aHasReuniao && !bHasReuniao) return -1;
+                            if (!aHasReuniao && bHasReuniao) return 1;
+
+                            // 3. Ordena pela tag numérica de prioridade (menor primeiro)
+                            const priorityA = getPriority(a);
+                            const priorityB = getPriority(b);
+                            
+                            return priorityA - priorityB;
                         });
                         
                         renderIssues(data);
@@ -206,6 +231,9 @@
                         <div class="issue-header">
                             <a href="${issue.web_url}" target="_blank" title="Abrir no GitLab">${issue.title}</a>
                             <span class="issue-state state-${issue.state}">${issue.state}</span>
+                        </div>
+                        <div class="issue-labels">
+                            ${issue.labels.map(label => `<span class="issue-label">${label}</span>`).join('')}
                         </div>
                         <div class="issue-body">
                             <div class="info-column">
